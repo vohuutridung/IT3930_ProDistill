@@ -1,0 +1,1 @@
+- VLSP2025-LegalSML/qwen3-1.7b-legal-pretrain

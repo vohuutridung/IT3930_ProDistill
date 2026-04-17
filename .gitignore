@@ -1,3 +1,6 @@
+MergeLM_models/
+save_layers/
+save_merge_models/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

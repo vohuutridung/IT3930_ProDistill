@@ -44,4 +44,7 @@ weight_map['lm_head'] = 'model_lm_head.pt'
 with open(os.path.join(split_dir, 'model_index.json'), 'w') as index_file:
     json.dump(weight_map, index_file, indent=4)
 
+del model
+torch.cuda.empty_cache()
+
 print('Model structure and weights have been saved, and the index file has been generated.')

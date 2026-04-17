@@ -48,12 +48,12 @@ def del_attr(obj, names):
 
 
 def load_pretrained_model(args):
-    if args.language_model_name == 'vohuutridung/qwen3-1.7b-legal-pretrain':
+    if args.language_model_name == 'qwen3-1.7b-legal-pretrain':
         pretrained_model = AutoModelForCausalLM.from_pretrained(
-            pretrained_model_name_or_path=os.path.join(args.cache_dir, args.language_model_name), device_map=args.device            
+            pretrained_model_name_or_path=os.path.join(args.cache_dir, args.language_model_name), device_map=args.device
         )
         remove_grad(pretrained_model)
-        return pretrained_model
+    return pretrained_model
 
 
 def get_weight_map_llm(model_name, args):
@@ -69,7 +69,7 @@ def load_part_model(args, module_name, model_name):
     weight_map = get_weight_map_llm(model_name, args)
     model_path = os.path.join(args.cache_dir, model_name, 'split')
     weight_path = os.path.join(model_path, weight_map[module_name])
-    model = torch.load(weight_path).to(args.device)
+    model = torch.load(weight_path, weights_only=False).to(args.device)
     remove_grad(model)
     return model
 
@@ -151,15 +151,16 @@ def transform_data_loader_prelayer_pertask_llm(data_loader, merged_model, models
             x = data['data'][0].to(device)
             print(x['input_ids'].shape)
             source_loader = data['source_loader']
-            
+
             inputs = []
 
-            # model_output[0] is the input of the first layer, with shape [batch_size, seq_length, embedding_dim]
-            model_output = merged_model(**x)
-            inputs.append(model_output[0])
+            # Call embed_tokens directly — the output shape is [batch_size, seq_length, embedding_dim]
+            merged_embed = merged_model.embed_tokens(x['input_ids'])
+            inputs.append(merged_embed)
+
             model = models[source_loader.item()]
-            model_output = model(**x)
-            inputs.append(model_output[0])
+            task_embed = model.embed_tokens(x['input_ids'])
+            inputs.append(task_embed)
 
             # shape: [num_tasks+1, batch_size, seq_length, embedding_dim] -> [batch_size, num_tasks+1, seq_length, embedding_dim]
             inputs = torch.stack(inputs).permute(1, 0, 2, 3).cpu()
@@ -179,9 +180,12 @@ def transform_data_loader_prelayer_pertask_llm(data_loader, merged_model, models
     return new_dataloader
 
 
-def transform_data_loader_layer_pertask_llm(data_loader, merged_model, models, device, pre_causal_mask, pre_position_ids):
+def transform_data_loader_layer_pertask_llm(data_loader, merged_model, models, device, pre_position_ids, pre_position_embeddings):
     """
-    Ok this is a cycle: output of the current layer is input of the next layer
+    Pass the hidden states (output of the previous layer) through the current decoder layer
+    to produce inputs for the next layer.  Both merged and finetuned layers receive the same
+    pre_position_ids and pre_position_embeddings (rotary cos/sin) since all models share the
+    same Qwen3 config and sequences are padded to a fixed length.
     """
     transformed_data = []
 
@@ -197,12 +201,22 @@ def transform_data_loader_layer_pertask_llm(data_loader, merged_model, models, d
             # inputs for the next layer
             inputs = []
 
-            # Get hidden state of the merged_layer, and hidden state of the finetuned model's layer
-            output = merged_model(x[0], pre_causal_mask[0], pre_position_ids[0])[0]
+            # Forward through the merged decoder layer
+            output = merged_model(
+                x[0],
+                attention_mask=None,
+                position_ids=pre_position_ids,
+                position_embeddings=pre_position_embeddings,
+            )
             inputs.append(output)
             idx = source_loader.item()
-            model = model[idx] # get the corresponding finetuned model of the data
-            output = model(x[1], pre_causal_mask[idx], pre_position_ids[idx])[0]
+            model = models[idx]  # get the corresponding finetuned model's layer
+            output = model(
+                x[1],
+                attention_mask=None,
+                position_ids=pre_position_ids,
+                position_embeddings=pre_position_embeddings,
+            )
             inputs.append(output)
             
             # [num_tasks, batch_size, seq_len, embedding_dim] -> [batch_size, num_tasks, seq_len, embedding_dim]
@@ -253,12 +267,12 @@ def load_avg_merged_model_llm(args, merge_coef=0.5):
 
 def load_merged_layers_llm(args, layer_idx):
     # Load specific layer of pretrained model
-    layer_pretrained = load_part_model(args, f'mode.layers.{layer_idx}', args.language_model_name)
+    layer_pretrained = load_part_model(args, f'model.layers.{layer_idx}', args.language_model_name)
 
     # Load specific layer of finetuned models
     layers = []
     for dataset in args.dataset_names:
-        layer = load_part_model(args, f'mode.layers.{layer_idx}', args.task_model_mapping_dict[dataset])
+        layer = load_part_model(args, f'model.layers.{layer_idx}', args.task_model_mapping_dict[dataset])
         layers.append(layer)
     
     merged_layers = MergedModel(layer_pretrained, layers, 'elementwise')

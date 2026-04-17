@@ -1,6 +1,3 @@
-from model_merging_methods.distill_merging_utils import transform_data_loader_prelayer_pertask_llm
-from joblib.externals.loky.backend import reduction
-from model_merging_methods.distill_merging_utils import load_pretrained_model
 import os
 import argparse
 import torch
@@ -96,20 +93,20 @@ def train(args, lr, epochs, merged_train_loader, load_model_paths):
         merged_train_loader, avg_pre_merged_model, per_models, args.device
     )
 
-    pre_causal_mask = []
-    pre_position_ids = []
-
-    pre_causal_mask.append(avg_pre_merged_model.causal_mask)
-    pre_position_ids.append(avg_pre_merged_model.position_ids)
-
-    for model in per_models:
-        pre_causal_mask.append(model.causal_mask)
-        pre_position_ids.append(model.position_ids)
+    # Compute position_ids and rotary position_embeddings once — all models share the same
+    # Qwen3 config and all sequences are padded to the same length, so these are identical
+    # for every model and every batch.  We pass them explicitly as kwargs to each decoder
+    # layer because Qwen3Model no longer stores causal_mask / position_ids as attributes.
+    _seq_len = 512  # matches max_seq_length used in data loading
+    pre_position_ids = torch.arange(_seq_len, device=args.device).unsqueeze(0)  # [1, seq_len]
+    _dummy = torch.zeros(1, _seq_len, avg_pre_merged_model.config.hidden_size, device=args.device)
+    pre_position_embeddings = avg_pre_merged_model.rotary_emb(_dummy, pre_position_ids)  # (cos, sin)
+    del _dummy
 
     del avg_pre_merged_model, per_models
     torch.cuda.empty_cache()
-    # OK here you have the embedding after passing through embed_tokens layer, so you now can del these layers.
-    # However, you need to keep the causal_mask and position_ids for the next layers.
+    # Embeddings after embed_tokens are now stored in merged_train_loader.
+    # pre_position_ids and pre_position_embeddings are reused for every decoder layer call.
 
     check_gpu()
 
@@ -127,8 +124,6 @@ def train(args, lr, epochs, merged_train_loader, load_model_paths):
         for epoch in tqdm(range(epochs)):
             total_loss = 0
             for data in merged_train_loader:
-                causal_mask = [pre_causal_mask[i].clone() for i in range(len(pre_causal_mask))]
-                position_ids = [pre_position_ids[i].clone() for i in range(len(pre_position_ids))]
                 x = data['data'].to(args.device)
                 batch_size = x.shape[0]
                 x = x.permute(1, 0, 2, 3)
@@ -137,16 +132,27 @@ def train(args, lr, epochs, merged_train_loader, load_model_paths):
 
                 optimizer.zero_grad()
 
-                # First, get_merged_model to return the layer with weight merged, after that forward with (x, causal_mask, position_ids) and [0] to get hidden state output of the layer
-                # Finally, reshape to flatten from (batch_size, seq_len, hidden_dim) to (batch_size, seq_len * hidden_dim)
-                feature = merged_layer.get_merged_model()(x[0], causal_mask[0], position_ids[0])[0].reshape(batch_size, -1)
+                # Forward through the merged decoder layer; pass position_ids and precomputed
+                # rotary embeddings (cos, sin) explicitly — Qwen3DecoderLayer requires them.
+                # Qwen3DecoderLayer.forward() returns a plain tensor (not a tuple), so [0]
+                # indexes the first (and only, batch_size=1) sample in the batch.
+                feature = merged_layer.get_merged_model()(
+                    x[0],
+                    attention_mask=None,
+                    position_ids=pre_position_ids,
+                    position_embeddings=pre_position_embeddings,
+                )[0].reshape(batch_size, -1)
 
                 loss = 0
                 idx = source_loader.item()
                 with torch.no_grad():
-                    # get hidden state of a specific finetuned model's layer of shape (batch_size, seq_len * hidden_dim) 
-                    # SIMILAR TO GETTING THAT OF PRETRAINED MODEL'S LAYER ABOVE
-                    true_feature = layer[idx](x[1], causal_mask[idx], position_ids[idx])[0].reshape(batch_size, -1)
+                    # get hidden state of the corresponding finetuned model's layer
+                    true_feature = layers[idx](
+                        x[1],
+                        attention_mask=None,
+                        position_ids=pre_position_ids,
+                        position_embeddings=pre_position_embeddings,
+                    )[0].reshape(batch_size, -1)
                 loss += F.mse_loss(feature, true_feature, reduction='none').sum()
                 total_loss += loss.detach().clone().cpu().item()
                 loss.backward()
@@ -156,7 +162,8 @@ def train(args, lr, epochs, merged_train_loader, load_model_paths):
 
         # Pass output of current layer to get input for the next layer
         merged_train_loader = transform_data_loader_layer_pertask_llm(
-            merged_train_loader, merged_layer.get_merged_model(), layers, args.device, pre_causal_mask, pre_position_ids
+            merged_train_loader, merged_layer.get_merged_model(), layers, args.device,
+            pre_position_ids, pre_position_embeddings,
         )
         layer_save_dir = f'{args.layer_save}/{args.dataset_name_combined}/{args.merging_method_name}/{args.language_model_name}/{args.epochs}/{args.lr}/{args.val_shot}'
         os.makedirs(layer_save_dir, exist_ok=True)
@@ -169,7 +176,7 @@ def train(args, lr, epochs, merged_train_loader, load_model_paths):
 
     merged_model = load_avg_merged_model_llm(args, merge_coef=0.5)
     for layer_idx in range(num_layers):
-        merged_layer = torch.load(f'{layer_save_dir}/layer_{layer_idx}.pt', map_location=args.device)
+        merged_layer = torch.load(f'{layer_save_dir}/layer_{layer_idx}.pt', map_location=args.device, weights_only=False)
         for name, _ in merged_model.model.layers[layer_idx].named_parameters():
             set_attr(merged_model.model.layers[layer_idx], name.split('.'), nn.Parameter(get_attr(merged_layer, name.split('.'))))
 

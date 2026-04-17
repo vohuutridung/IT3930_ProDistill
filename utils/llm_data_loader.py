@@ -1,17 +1,16 @@
-from sympy.core.random import seed
-from cv2 import line
 import pandas as pd
 from transformers import AutoTokenizer
 import json
 import datasets
 import numpy as np
 from torch.utils.data import Subset
+
 class LLMDataLoader:
     def __init__(self, tokenizer: AutoTokenizer):
         self.tokenizer = tokenizer
-        self.nli_path = 'legal_data/nli.json'
-        self.mcq_path = 'legal_data/mcq.json'
-        self.sqa_path = 'legal_data/sqa.json'
+        self.nli_path = 'legal_data/nli.jsonl'
+        self.mcq_path = 'legal_data/mcq.jsonl'
+        self.sqa_path = 'legal_data/sqa.jsonl'
         self.max_len = 0
 
     def encode(self, examples: dict, max_seq_length: int = 512):

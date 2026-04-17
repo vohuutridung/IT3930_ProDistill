@@ -188,13 +188,6 @@ def train(args, lr, epochs, merged_train_loader, load_model_paths):
 
 
 
-
-
-
-
-
-
-
 if __name__ == '__main__':
     start_time = time.time()
     args.dataset_names = []

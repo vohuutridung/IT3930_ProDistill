@@ -64,7 +64,6 @@ def check_gpu():
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[
-                        logging.FileHandler(f"train_{args.val_shot}.log"),
                         logging.StreamHandler()
                     ])
 logger = logging.getLogger()
@@ -187,7 +186,6 @@ def train(args, lr, epochs, merged_train_loader, load_model_paths):
 
 
 
-
 if __name__ == '__main__':
     start_time = time.time()
     args.dataset_names = []
@@ -210,6 +208,11 @@ if __name__ == '__main__':
         load_model_paths.append(f"./MergeLM_models/{task_model_mapping_dict[dataset_name]}")
 
     args.save_merged_model_path = f"./save_merge_models/{args.dataset_name_combined}/{args.merging_method_name}/{args.language_model_name}/{args.epochs}/{args.lr}/{args.val_shot}"
+    os.makedirs(args.save_merged_model_path, exist_ok=True)
+    _log_file_handler = logging.FileHandler(f"{args.save_merged_model_path}/train_{args.val_shot}.log")
+    _log_file_handler.setLevel(logging.DEBUG)
+    _log_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(_log_file_handler)
     args.load_model_paths_dict = {
         args.dataset_names[i]: load_model_paths[i] for i in range(len(args.dataset_names))
     }
@@ -291,5 +294,5 @@ if __name__ == '__main__':
     
     # save eval_datasets
     for dataset_name, eval_dataset in zip(args.dataset_names, eval_datasets):
-        indices = eval_datasets.indices
+        indices = eval_dataset.indices
         torch.save(indices, f"{args.save_merged_model_path}/{dataset_name}_indices.pt")

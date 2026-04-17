@@ -1,3 +1,5 @@
+datasets
+transformers
 accelerate==1.13.0
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.5
@@ -12,7 +14,6 @@ click==8.3.1
 comm==0.2.3
 cuda-bindings==13.0.3
 cuda-pathfinder==1.4.3
-datasets==4.8.4
 debugpy==1.8.20
 decorator==5.2.1
 dill==0.4.1
@@ -61,7 +62,7 @@ nvidia-nccl-cu13==2.28.9
 nvidia-nvjitlink==13.0.88
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
-packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1769093650/work
+packaging
 pandas==3.0.2
 parso==0.8.6
 pexpect==4.9.0
@@ -97,7 +98,6 @@ torchvision==0.25.0+cu130
 tornado==6.5.5
 tqdm==4.67.3
 traitlets==5.14.3
-transformers==5.5.4
 triton==3.6.0
 typer==0.24.1
 typing_extensions==4.15.0

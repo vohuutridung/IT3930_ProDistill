@@ -122,7 +122,7 @@ def train(args, lr, epochs, merged_train_loader, load_model_paths):
         optimizer = torch.optim.Adam(merged_layer.parameters(), lr=lr)
 
         for epoch in tqdm(range(epochs)):
-            total_loss = 0
+            total_loss = 0 # total_loss over 1 epoch
             for data in merged_train_loader:
                 x = data['data'].to(args.device)
                 batch_size = x.shape[0]
